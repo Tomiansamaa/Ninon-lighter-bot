@@ -20,7 +20,7 @@ API_KEY_INDEX = int(os.getenv('LIGHTER_API_KEY_INDEX', '10'))
 BTC_AMOUNT = 0.0000025  # Change this to trade more/less BTC
 TARGET_PROFIT_PERCENT = 2.0  # Close at +2% profit (price drops 2% for SHORT)
 FIRST_DOUBLE_LOSS_USD = -0.3  # First doubling at -$0.3
-SECOND_DOUBLE_LOSS_USD = -2  # Second doubling (triple) at -$2
+SECOND_DOUBLE_LOSS_USD = -2  # Second doubling (quadruple = 4x total) at -$2
 
 
 async def get_price():
@@ -104,13 +104,14 @@ async def place_take_profit_percent(client, entry_price, position_size_btc, prof
         return None
 
 
-async def open_short(client):
+async def open_short(client, amount_multiplier=1):
     """Open SHORT - just send BTC amount, no calculations"""
     price = await get_price()
-    base_amount = int(BTC_AMOUNT * 1e8)  # Convert to satoshis
+    btc_to_trade = BTC_AMOUNT * amount_multiplier
+    base_amount = int(btc_to_trade * 1e8)  # Convert to satoshis
     
     print(f"\n🔴 OPENING SHORT")
-    print(f"BTC: {BTC_AMOUNT} BTC")
+    print(f"BTC: {btc_to_trade} BTC" + (f" ({amount_multiplier}x)" if amount_multiplier > 1 else ""))
     print(f"Price: ${price:,.2f}")
     
     client_order_index = int(time.time() * 1000) % 2147483647
@@ -153,8 +154,8 @@ async def main():
     print("🤖 SIMPLEST BOT - PERCENTAGE-BASED")
     print(f"Amount: {BTC_AMOUNT} BTC")
     print(f"Take Profit: {TARGET_PROFIT_PERCENT}% position profit")
-    print(f"First double at: ${FIRST_DOUBLE_LOSS_USD}")
-    print(f"Second double (triple) at: ${SECOND_DOUBLE_LOSS_USD}")
+    print(f"First double at: ${FIRST_DOUBLE_LOSS_USD} → 2x position")
+    print(f"Second double at: ${SECOND_DOUBLE_LOSS_USD} → 4x position (adds 2x)")
     print(f"Will automatically open new position after each TP\n")
     
     client = lighter.SignerClient(
@@ -219,9 +220,9 @@ async def main():
                 
                 # Position will close automatically via TP order at {TARGET_PROFIT_PERCENT}%
                 
-                # Check for second doubling (triple position)
+                # Check for second doubling (quadruple position)
                 if pnl_usd <= SECOND_DOUBLE_LOSS_USD and first_doubled and not second_doubled:
-                    print(f"\n⚠️⚠️ MAJOR LOSS at ${pnl_usd:.2f} → TRIPLING POSITION (2nd double)")
+                    print(f"\n⚠️⚠️ MAJOR LOSS at ${pnl_usd:.2f} → QUADRUPLING POSITION (2nd double = 2x)")
                     try:
                         # Cancel old TP
                         if tp_order_index:
@@ -231,8 +232,8 @@ async def main():
                             except:
                                 pass
                         
-                        # Add another position
-                        await open_short(client)
+                        # Add 2x position (double the original)
+                        await open_short(client, amount_multiplier=2)
                         await asyncio.sleep(1)
                         
                         # Get new position and place new TP
@@ -246,9 +247,9 @@ async def main():
                             )
                         
                         second_doubled = True
-                        print(f"✅ Position tripled! New TP set for {TARGET_PROFIT_PERCENT}%\n")
+                        print(f"✅ Position quadrupled (4x)! New TP set for {TARGET_PROFIT_PERCENT}%\n")
                     except Exception as e:
-                        print(f"❌ Failed to triple: {e}\n")
+                        print(f"❌ Failed to quadruple: {e}\n")
                 
                 # Check for first doubling
                 elif pnl_usd <= FIRST_DOUBLE_LOSS_USD and not first_doubled:
