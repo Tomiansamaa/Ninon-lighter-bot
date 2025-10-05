@@ -18,9 +18,9 @@ API_KEY_INDEX = int(os.getenv('LIGHTER_API_KEY_INDEX', '10'))
 
 # SIMPLE SETTINGS - Percentage-based
 BTC_AMOUNT = 0.0000025  # Change this to trade more/less BTC
-TARGET_PROFIT_PERCENT = 1.0  # Close at +1% profit (price drops 1% for SHORT)
-FIRST_DOUBLE_LOSS_USD = -0.3  # First doubling at -$0.25
-SECOND_DOUBLE_LOSS_USD = -2  # Second doubling (triple) at -$1.50
+TARGET_PROFIT_PERCENT = 2.0  # Close at +2% profit (price drops 2% for SHORT)
+FIRST_DOUBLE_LOSS_USD = -0.3  # First doubling at -$0.3
+SECOND_DOUBLE_LOSS_USD = -2  # Second doubling (triple) at -$2
 
 
 async def get_price():
@@ -169,8 +169,8 @@ async def main():
             # Open new position
             entry_price = await open_short(client)
             
-            # Wait 1 second for position to register
-            await asyncio.sleep(1)
+            # Wait 0.5 second for position to register
+            await asyncio.sleep(0.5)
             position = await get_live_position()
             if position and position['size'] > 0.000001:
                 print(f"✅ Position confirmed: {position['size']:.8f} BTC at ${position['entry_price']:.2f}")
@@ -204,8 +204,8 @@ async def main():
                 position = await get_live_position()
                 
                 if not position:
-                    print("✅ Position closed (TP hit)! Waiting 3 seconds before new position...")
-                    await asyncio.sleep(3)
+                    print("✅ Position closed (TP hit)! Waiting 1 second before new position...")
+                    await asyncio.sleep(1)
                     break  # Exit inner loop to open new position
             
                 current_price = await get_price()
@@ -233,7 +233,7 @@ async def main():
                         
                         # Add another position
                         await open_short(client)
-                        await asyncio.sleep(2)
+                        await asyncio.sleep(1)
                         
                         # Get new position and place new TP
                         new_position = await get_live_position()
@@ -264,7 +264,7 @@ async def main():
                         
                         # Double position
                         await open_short(client)
-                        await asyncio.sleep(2)
+                        await asyncio.sleep(1)
                         
                         # Get new position and place new TP
                         new_position = await get_live_position()
