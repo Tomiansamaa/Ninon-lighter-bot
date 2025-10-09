@@ -28,37 +28,52 @@ async def get_price():
     """Get BTC price"""
     async with aiohttp.ClientSession() as session:
         url = f"{BASE_URL}/api/v1/orderBookDetails?market_id=1"
-        async with session.get(url) as response:
-            data = await response.json()
-            return float(data['order_book_details'][0]['last_trade_price'])
+        try:
+            async with session.get(url) as response:
+                data = await response.json()
+                if 'order_book_details' in data and len(data['order_book_details']) > 0:
+                    return float(data['order_book_details'][0]['last_trade_price'])
+                else:
+                    print(f"⚠️ Unexpected API response: {data}")
+                    # Return a fallback or retry
+                    await asyncio.sleep(0.5)
+                    return await get_price()  # Retry once
+        except Exception as e:
+            print(f"⚠️ Error getting price: {e}")
+            await asyncio.sleep(1)
+            return await get_price()  # Retry
 
 
 async def get_live_position():
     """Get actual live position from Lighter"""
     async with aiohttp.ClientSession() as session:
         url = f"{BASE_URL}/api/v1/account?by=index&value={ACCOUNT_INDEX}"
-        async with session.get(url) as response:
-            data = await response.json()
-            
-            # Check for positions
-            account = data.get('account') or (data.get('accounts', [{}])[0] if data.get('accounts') else {})
-            positions = account.get('positions', [])
-            
-            # Find BTC position
-            for pos in positions:
-                if pos.get('symbol') == 'BTC' or pos.get('market_id') == 1:
-                    position_btc = float(pos.get('position', 0)) / 1e8  # Convert from satoshis
-                    entry_price = float(pos.get('avg_entry_price', 0))
-                    unrealized_pnl = float(pos.get('unrealized_pnl', 0))
-                    
-                    if position_btc != 0:
-                        return {
-                            'size': abs(position_btc),
-                            'entry_price': entry_price,
-                            'pnl_usd': unrealized_pnl,
-                            'is_short': position_btc < 0
-                        }
-            
+        try:
+            async with session.get(url) as response:
+                data = await response.json()
+                
+                # Check for positions
+                account = data.get('account') or (data.get('accounts', [{}])[0] if data.get('accounts') else {})
+                positions = account.get('positions', [])
+                
+                # Find BTC position
+                for pos in positions:
+                    if pos.get('symbol') == 'BTC' or pos.get('market_id') == 1:
+                        position_btc = float(pos.get('position', 0)) / 1e8  # Convert from satoshis
+                        entry_price = float(pos.get('avg_entry_price', 0))
+                        unrealized_pnl = float(pos.get('unrealized_pnl', 0))
+                        
+                        if position_btc != 0:
+                            return {
+                                'size': abs(position_btc),
+                                'entry_price': entry_price,
+                                'pnl_usd': unrealized_pnl,
+                                'is_short': position_btc < 0
+                            }
+                
+                return None
+        except Exception as e:
+            print(f"⚠️ Error getting position: {e}")
             return None
 
 
