@@ -51,10 +51,10 @@ def get_dynamic_take_profit(show_details=False):
     # Medium volatility (0.3-0.8%) = Take 2.0% profit (default)
     # High volatility (>0.8%) = Take 3.0% profit (capture big moves)
     
-    if volatility < 0.05:
+    if volatility < 0.01:
         tp = 1.5
         vol_label = "LOW"
-    elif volatility < 0.1:
+    elif volatility < 0.05:
         tp = TARGET_PROFIT_PERCENT
         vol_label = "MEDIUM"
     else:
@@ -290,6 +290,7 @@ async def main():
                 
                 # Get current dynamic TP
                 current_tp = get_dynamic_take_profit()
+                current_volatility = calculate_volatility()
                 
                 # Check if TP has changed due to volatility change
                 if current_tp != last_tp_percent and tp_order_index:
@@ -315,7 +316,7 @@ async def main():
                         print(f"⚠️ Failed to update TP: {e}")
                 
                 emoji = "🟢" if pnl_usd >= 0 else "🔴"
-                print(f"{emoji} P&L: ${pnl_usd:+.2f} ({pnl_percent:+.2f}%) | Entry: ${position['entry_price']:,.2f} | Now: ${current_price:,.2f} | TP: {current_tp}%")
+                print(f"{emoji} P&L: ${pnl_usd:+.2f} ({pnl_percent:+.2f}%) | Entry: ${position['entry_price']:,.2f} | Now: ${current_price:,.2f} | Vol: {current_volatility:.3f}% | TP: {current_tp}%")
                 
                 # Position will close automatically via TP order at {TARGET_PROFIT_PERCENT}%
                 
