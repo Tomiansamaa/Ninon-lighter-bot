@@ -295,8 +295,11 @@ async def main():
                 if current_tp != last_tp_percent and tp_order_index:
                     print(f"\n🔄 TP CHANGED: {last_tp_percent}% → {current_tp}% (volatility shift)")
                     try:
-                        # Cancel old TP
-                        await client.create_cancel_order(1, tp_order_index)
+                        # Cancel old TP - try both possible method names
+                        try:
+                            await client.cancel_order(1, tp_order_index)
+                        except AttributeError:
+                            await client.create_cancel_order(1, tp_order_index)
                         print("✅ Old TP cancelled")
                         
                         # Place new TP with updated percentage
