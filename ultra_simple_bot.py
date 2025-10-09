@@ -17,11 +17,53 @@ ACCOUNT_INDEX = int(os.getenv('LIGHTER_ACCOUNT_INDEX'))
 API_KEY_INDEX = int(os.getenv('LIGHTER_API_KEY_INDEX', '10'))
 
 # SIMPLE SETTINGS - Percentage-based
-BTC_AMOUNT = 0.0000025  # Change this to trade more/less BTC
-TARGET_PROFIT_PERCENT = 2.0  # Close at +2% profit (price drops 2% for SHORT)
+BTC_AMOUNT = 0.000003  # Change this to trade more/less BTC
+TARGET_PROFIT_PERCENT = 2.0  # Base profit target (adjusted dynamically by volatility)
 FIRST_DOUBLE_LOSS_USD = -0.3  # First doubling at -$0.3
-SECOND_DOUBLE_LOSS_USD = -2  # Second doubling (quadruple = 4x total) at -$2
-THIRD_DOUBLE_LOSS_USD = -15  # Third doubling (octuple = 8x total) at -$15
+SECOND_DOUBLE_LOSS_USD = -5  # Second doubling (quadruple = 4x total) at -$2
+THIRD_DOUBLE_LOSS_USD = -20  # Third doubling (octuple = 8x total) at -$15
+
+# Recent prices for volatility calculation
+recent_prices = []
+
+
+def calculate_volatility():
+    """Calculate recent price volatility (last 20 prices)"""
+    if len(recent_prices) < 5:
+        return 0.5  # Default to medium volatility
+    
+    # Calculate percentage changes
+    changes = []
+    for i in range(1, len(recent_prices)):
+        pct_change = abs((recent_prices[i] - recent_prices[i-1]) / recent_prices[i-1]) * 100
+        changes.append(pct_change)
+    
+    # Average volatility
+    avg_volatility = sum(changes) / len(changes)
+    return avg_volatility
+
+
+def get_dynamic_take_profit(show_details=False):
+    """Get take profit percentage based on current volatility"""
+    volatility = calculate_volatility()
+    
+    # Low volatility (<0.3% avg moves) = Take 1.5% profit (faster wins)
+    # Medium volatility (0.3-0.8%) = Take 2.0% profit (default)
+    # High volatility (>0.8%) = Take 3.0% profit (capture big moves)
+    
+    if volatility < 0.3:
+        tp = 1.5
+        vol_label = "LOW"
+    elif volatility < 0.8:
+        tp = TARGET_PROFIT_PERCENT
+        vol_label = "MEDIUM"
+    else:
+        tp = 3.0
+        vol_label = "HIGH"
+    
+    if show_details:
+        print(f"📊 Volatility: {volatility:.3f}% ({vol_label}) → TP: {tp}%")
+    return tp
 
 
 async def get_price():
@@ -32,7 +74,14 @@ async def get_price():
             async with session.get(url) as response:
                 data = await response.json()
                 if 'order_book_details' in data and len(data['order_book_details']) > 0:
-                    return float(data['order_book_details'][0]['last_trade_price'])
+                    price = float(data['order_book_details'][0]['last_trade_price'])
+                    
+                    # Track recent prices for volatility (keep last 20)
+                    recent_prices.append(price)
+                    if len(recent_prices) > 20:
+                        recent_prices.pop(0)
+                    
+                    return price
                 else:
                     print(f"⚠️ Unexpected API response: {data}")
                     # Return a fallback or retry
@@ -167,9 +216,12 @@ async def close_short(client):
 
 
 async def main():
-    print("🤖 SIMPLEST BOT - PERCENTAGE-BASED")
+    print("🤖 SIMPLEST BOT - PERCENTAGE-BASED WITH DYNAMIC TP")
     print(f"Amount: {BTC_AMOUNT} BTC")
-    print(f"Take Profit: {TARGET_PROFIT_PERCENT}% position profit")
+    print(f"Take Profit: DYNAMIC (1.5-3.0% based on volatility)")
+    print(f"  • Low volatility → 1.5% TP (faster wins)")
+    print(f"  • Medium volatility → 2.0% TP (balanced)")
+    print(f"  • High volatility → 3.0% TP (capture big moves)")
     print(f"First double at: ${FIRST_DOUBLE_LOSS_USD} → 2x position")
     print(f"Second double at: ${SECOND_DOUBLE_LOSS_USD} → 4x position (adds 2x)")
     print(f"Third double at: ${THIRD_DOUBLE_LOSS_USD} → 8x position (adds 4x)")
@@ -194,19 +246,21 @@ async def main():
                 print(f"✅ Position confirmed: {position['size']:.8f} BTC at ${position['entry_price']:.2f}")
             
             if position and position['size'] > 0.000001:
+                dynamic_tp = get_dynamic_take_profit(show_details=True)
                 tp_order_index = await place_take_profit_percent(
                     client, 
                     position['entry_price'], 
                     position['size'], 
-                    TARGET_PROFIT_PERCENT
+                    dynamic_tp
                 )
             else:
                 print("⚠️ Could not get position after 10 seconds - using entry price")
+                dynamic_tp = get_dynamic_take_profit(show_details=True)
                 tp_order_index = await place_take_profit_percent(
                     client, 
                     entry_price, 
                     BTC_AMOUNT, 
-                    TARGET_PROFIT_PERCENT
+                    dynamic_tp
                 )
             
             first_doubled = False
@@ -233,8 +287,11 @@ async def main():
                 # Calculate P&L percentage for SHORT
                 pnl_percent = ((position['entry_price'] - current_price) / position['entry_price']) * 100
                 
+                # Get current dynamic TP
+                current_tp = get_dynamic_take_profit()
+                
                 emoji = "🟢" if pnl_usd >= 0 else "🔴"
-                print(f"{emoji} P&L: ${pnl_usd:+.2f} ({pnl_percent:+.2f}%) | Entry: ${position['entry_price']:,.2f} | Now: ${current_price:,.2f}")
+                print(f"{emoji} P&L: ${pnl_usd:+.2f} ({pnl_percent:+.2f}%) | Entry: ${position['entry_price']:,.2f} | Now: ${current_price:,.2f} | TP: {current_tp}%")
                 
                 # Position will close automatically via TP order at {TARGET_PROFIT_PERCENT}%
                 
@@ -257,15 +314,16 @@ async def main():
                         # Get new position and place new TP
                         new_position = await get_live_position()
                         if new_position:
+                            dynamic_tp = get_dynamic_take_profit()
                             tp_order_index = await place_take_profit_percent(
                                 client,
                                 new_position['entry_price'],
                                 new_position['size'],
-                                TARGET_PROFIT_PERCENT
+                                dynamic_tp
                             )
                         
                         third_doubled = True
-                        print(f"✅ Position octupled (8x)! New TP set for {TARGET_PROFIT_PERCENT}%\n")
+                        print(f"✅ Position octupled (8x)! New TP set\n")
                     except Exception as e:
                         print(f"❌ Failed to octuple: {e}\n")
                 
@@ -288,15 +346,16 @@ async def main():
                         # Get new position and place new TP
                         new_position = await get_live_position()
                         if new_position:
+                            dynamic_tp = get_dynamic_take_profit()
                             tp_order_index = await place_take_profit_percent(
                                 client,
                                 new_position['entry_price'],
                                 new_position['size'],
-                                TARGET_PROFIT_PERCENT
+                                dynamic_tp
                             )
                         
                         second_doubled = True
-                        print(f"✅ Position quadrupled (4x)! New TP set for {TARGET_PROFIT_PERCENT}%\n")
+                        print(f"✅ Position quadrupled (4x)! New TP set\n")
                     except Exception as e:
                         print(f"❌ Failed to quadruple: {e}\n")
                 
@@ -319,15 +378,16 @@ async def main():
                         # Get new position and place new TP
                         new_position = await get_live_position()
                         if new_position:
+                            dynamic_tp = get_dynamic_take_profit()
                             tp_order_index = await place_take_profit_percent(
                                 client,
                                 new_position['entry_price'],
                                 new_position['size'],
-                                TARGET_PROFIT_PERCENT
+                                dynamic_tp
                             )
                         
                         first_doubled = True
-                        print(f"✅ Position doubled! New TP set for {TARGET_PROFIT_PERCENT}%\n")
+                        print(f"✅ Position doubled! New TP set\n")
                     except Exception as e:
                         print(f"❌ Failed to double: {e}\n")
                 
