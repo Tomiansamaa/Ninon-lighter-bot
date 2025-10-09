@@ -18,7 +18,7 @@ API_KEY_INDEX = int(os.getenv('LIGHTER_API_KEY_INDEX', '10'))
 
 # SIMPLE SETTINGS - Percentage-based
 BTC_AMOUNT = 0.000003  # Change this to trade more/less BTC
-TARGET_PROFIT_PERCENT = 2.0  # Base profit target (adjusted dynamically by volatility)
+TARGET_PROFIT_PERCENT = 3.0  # Base profit target (adjusted dynamically by volatility)
 FIRST_DOUBLE_LOSS_USD = -0.3  # First doubling at -$0.3
 SECOND_DOUBLE_LOSS_USD = -5  # Second doubling (quadruple = 4x total) at -$2
 THIRD_DOUBLE_LOSS_USD = -20  # Third doubling (octuple = 8x total) at -$15
@@ -51,14 +51,14 @@ def get_dynamic_take_profit(show_details=False):
     # Medium volatility (0.3-0.8%) = Take 2.0% profit (default)
     # High volatility (>0.8%) = Take 3.0% profit (capture big moves)
     
-    if volatility < 0.3:
+    if volatility < 0.05:
         tp = 1.5
         vol_label = "LOW"
-    elif volatility < 0.8:
+    elif volatility < 0.1:
         tp = TARGET_PROFIT_PERCENT
         vol_label = "MEDIUM"
     else:
-        tp = 3.0
+        tp = 5.0
         vol_label = "HIGH"
     
     if show_details:
@@ -266,6 +266,7 @@ async def main():
             first_doubled = False
             second_doubled = False
             third_doubled = False
+            last_tp_percent = dynamic_tp  # Track the TP we set
             
             print(f"\n📊 Monitoring for TP or doubling...")
             
@@ -289,6 +290,26 @@ async def main():
                 
                 # Get current dynamic TP
                 current_tp = get_dynamic_take_profit()
+                
+                # Check if TP has changed due to volatility change
+                if current_tp != last_tp_percent and tp_order_index:
+                    print(f"\n🔄 TP CHANGED: {last_tp_percent}% → {current_tp}% (volatility shift)")
+                    try:
+                        # Cancel old TP
+                        await client.create_cancel_order(1, tp_order_index)
+                        print("✅ Old TP cancelled")
+                        
+                        # Place new TP with updated percentage
+                        tp_order_index = await place_take_profit_percent(
+                            client,
+                            position['entry_price'],
+                            position['size'],
+                            current_tp
+                        )
+                        last_tp_percent = current_tp
+                        print(f"✅ New TP placed at {current_tp}%\n")
+                    except Exception as e:
+                        print(f"⚠️ Failed to update TP: {e}")
                 
                 emoji = "🟢" if pnl_usd >= 0 else "🔴"
                 print(f"{emoji} P&L: ${pnl_usd:+.2f} ({pnl_percent:+.2f}%) | Entry: ${position['entry_price']:,.2f} | Now: ${current_price:,.2f} | TP: {current_tp}%")
