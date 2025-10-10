@@ -51,7 +51,7 @@ def get_dynamic_take_profit(show_details=False):
     # Medium volatility (0.3-0.8%) = Take 2.0% profit (default)
     # High volatility (>0.8%) = Take 3.0% profit (capture big moves)
     
-    if volatility < 0.01:
+    if volatility < 0.015:
         tp = 1.5
         vol_label = "LOW"
     elif volatility < 0.05:
@@ -334,10 +334,16 @@ async def main():
                         
                         # Add 4x position (quadruple the original)
                         await open_short(client, amount_multiplier=4)
-                        await asyncio.sleep(0.5)
+                        await asyncio.sleep(1)  # Wait longer for position to combine
                         
-                        # Get new position and place new TP
-                        new_position = await get_live_position()
+                        # Get new position with retry
+                        new_position = None
+                        for retry in range(3):
+                            new_position = await get_live_position()
+                            if new_position and new_position['size'] > 0.000001:
+                                break
+                            await asyncio.sleep(0.5)
+                        
                         if new_position:
                             dynamic_tp = get_dynamic_take_profit()
                             tp_order_index = await place_take_profit_percent(
@@ -349,6 +355,7 @@ async def main():
                         
                         third_doubled = True
                         print(f"✅ Position octupled (8x)! New TP set\n")
+                        continue  # Continue monitoring, don't break out
                     except Exception as e:
                         print(f"❌ Failed to octuple: {e}\n")
                 
@@ -366,10 +373,16 @@ async def main():
                         
                         # Add 2x position (double the original)
                         await open_short(client, amount_multiplier=2)
-                        await asyncio.sleep(0.5)
+                        await asyncio.sleep(1)  # Wait longer for position to combine
                         
-                        # Get new position and place new TP
-                        new_position = await get_live_position()
+                        # Get new position with retry
+                        new_position = None
+                        for retry in range(3):
+                            new_position = await get_live_position()
+                            if new_position and new_position['size'] > 0.000001:
+                                break
+                            await asyncio.sleep(0.5)
+                        
                         if new_position:
                             dynamic_tp = get_dynamic_take_profit()
                             tp_order_index = await place_take_profit_percent(
@@ -381,6 +394,7 @@ async def main():
                         
                         second_doubled = True
                         print(f"✅ Position quadrupled (4x)! New TP set\n")
+                        continue  # Continue monitoring, don't break out
                     except Exception as e:
                         print(f"❌ Failed to quadruple: {e}\n")
                 
@@ -398,10 +412,16 @@ async def main():
                         
                         # Double position
                         await open_short(client)
-                        await asyncio.sleep(0.5)
+                        await asyncio.sleep(1)  # Wait longer for position to combine
                         
-                        # Get new position and place new TP
-                        new_position = await get_live_position()
+                        # Get new position with retry
+                        new_position = None
+                        for retry in range(3):
+                            new_position = await get_live_position()
+                            if new_position and new_position['size'] > 0.000001:
+                                break
+                            await asyncio.sleep(0.5)
+                        
                         if new_position:
                             dynamic_tp = get_dynamic_take_profit()
                             tp_order_index = await place_take_profit_percent(
@@ -413,6 +433,7 @@ async def main():
                         
                         first_doubled = True
                         print(f"✅ Position doubled! New TP set\n")
+                        continue  # Continue monitoring, don't break out
                     except Exception as e:
                         print(f"❌ Failed to double: {e}\n")
                 
