@@ -20,52 +20,70 @@ API_KEY_INDEX = int(os.getenv('LIGHTER_API_KEY_INDEX', '10'))
 BTC_AMOUNT = 0.000015  # Change this to trade more/less BTC
 TARGET_PROFIT_PERCENT = 3.0  # Base profit target (adjusted dynamically by volatility)
 FIRST_DOUBLE_LOSS_USD = -1.5  # First doubling at -$0.3
-SECOND_DOUBLE_LOSS_USD = -25  # Second doubling (quadruple = 4x total) at -$2
-THIRD_DOUBLE_LOSS_USD = -100  # Third doubling (octuple = 8x total) at -$15
+SECOND_DOUBLE_LOSS_USD = -27  # Second doubling (quadruple = 4x total) at -$2
+THIRD_DOUBLE_LOSS_USD = -150  # Third doubling (octuple = 8x total) at -$15
 
-# Recent prices for volatility calculation
-recent_prices = []
+# Recent prices for volatility calculation (with timestamps)
+recent_prices = []  # List of (timestamp, price) tuples
 
 # Global HTTP session for reuse (faster API calls)
 http_session = None
 
 
 def calculate_volatility():
-    """Calculate recent price volatility (last 20 prices)"""
+    """Calculate volatility using Standard Deviation (more accurate than average)"""
     if len(recent_prices) < 5:
         return 0.5  # Default to medium volatility
     
+    # Extract just prices for calculation
+    prices = [p[1] for p in recent_prices[-30:]]  # Last 30 prices max
+    
     # Calculate percentage changes
     changes = []
-    for i in range(1, len(recent_prices)):
-        pct_change = abs((recent_prices[i] - recent_prices[i-1]) / recent_prices[i-1]) * 100
+    for i in range(1, len(prices)):
+        pct_change = ((prices[i] - prices[i-1]) / prices[i-1]) * 100
         changes.append(pct_change)
     
-    # Average volatility
-    avg_volatility = sum(changes) / len(changes)
-    return avg_volatility
+    if not changes:
+        return 0.5
+    
+    # Standard Deviation (industry standard for volatility)
+    mean = sum(changes) / len(changes)
+    variance = sum((x - mean) ** 2 for x in changes) / len(changes)
+    std_dev = variance ** 0.5
+    
+    return std_dev
 
 
 def get_dynamic_take_profit(show_details=False):
-    """Get take profit percentage based on current volatility"""
+    """Get take profit percentage based on current volatility with smarter thresholds"""
     volatility = calculate_volatility()
     
-    # Low volatility (<0.3% avg moves) = Take 1.5% profit (faster wins)
-    # Medium volatility (0.3-0.8%) = Take 2.0% profit (default)
-    # High volatility (>0.8%) = Take 3.0% profit (capture big moves)
+    # IMPROVED THRESHOLDS based on BTC typical movements:
+    # Ultra-low vol (<0.03% std) = 1.2% TP (grind it out)
+    # Low vol (0.03-0.08%) = 1.8% TP (quick wins)
+    # Medium vol (0.08-0.15%) = 2.5% TP (balanced)
+    # High vol (0.15-0.25%) = 3.5% TP (catch swings)
+    # Extreme vol (>0.25%) = 5.0% TP (big moves only)
     
-    if volatility < 0.015:
-        tp = 1.5
+    if volatility < 0.03:
+        tp = 1.2
+        vol_label = "ULTRA-LOW"
+    elif volatility < 0.08:
+        tp = 1.8
         vol_label = "LOW"
-    elif volatility < 0.05:
-        tp = TARGET_PROFIT_PERCENT
+    elif volatility < 0.15:
+        tp = 2.5
         vol_label = "MEDIUM"
+    elif volatility < 0.25:
+        tp = 3.5
+        vol_label = "HIGH"
     else:
         tp = 5.0
-        vol_label = "HIGH"
+        vol_label = "EXTREME"
     
     if show_details:
-        print(f"📊 Volatility: {volatility:.3f}% ({vol_label}) → TP: {tp}%")
+        print(f"📊 Vol: {volatility:.4f}% STD ({vol_label}) → TP: {tp}%")
     return tp
 
 
@@ -82,9 +100,9 @@ async def get_price():
             if 'order_book_details' in data and len(data['order_book_details']) > 0:
                 price = float(data['order_book_details'][0]['last_trade_price'])
                 
-                # Track recent prices for volatility (keep last 20)
-                recent_prices.append(price)
-                if len(recent_prices) > 20:
+                # Track recent prices for volatility with timestamps (keep last 30)
+                recent_prices.append((time.time(), price))
+                if len(recent_prices) > 30:
                     recent_prices.pop(0)
                 
                 return price
