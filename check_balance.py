@@ -56,3 +56,5 @@ if __name__ == "__main__":
     can_trade = asyncio.run(show_balance())
     exit(0 if can_trade else 1)
 
+
+

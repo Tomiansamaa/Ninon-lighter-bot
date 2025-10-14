@@ -17,14 +17,17 @@ ACCOUNT_INDEX = int(os.getenv('LIGHTER_ACCOUNT_INDEX'))
 API_KEY_INDEX = int(os.getenv('LIGHTER_API_KEY_INDEX', '10'))
 
 # SIMPLE SETTINGS - Percentage-based
-BTC_AMOUNT = 0.000003  # Change this to trade more/less BTC
+BTC_AMOUNT = 0.000015  # Change this to trade more/less BTC
 TARGET_PROFIT_PERCENT = 3.0  # Base profit target (adjusted dynamically by volatility)
-FIRST_DOUBLE_LOSS_USD = -0.3  # First doubling at -$0.3
-SECOND_DOUBLE_LOSS_USD = -5  # Second doubling (quadruple = 4x total) at -$2
-THIRD_DOUBLE_LOSS_USD = -20  # Third doubling (octuple = 8x total) at -$15
+FIRST_DOUBLE_LOSS_USD = -1.5  # First doubling at -$0.3
+SECOND_DOUBLE_LOSS_USD = -25  # Second doubling (quadruple = 4x total) at -$2
+THIRD_DOUBLE_LOSS_USD = -100  # Third doubling (octuple = 8x total) at -$15
 
 # Recent prices for volatility calculation
 recent_prices = []
+
+# Global HTTP session for reuse (faster API calls)
+http_session = None
 
 
 def calculate_volatility():
@@ -68,62 +71,68 @@ def get_dynamic_take_profit(show_details=False):
 
 async def get_price():
     """Get BTC price"""
-    async with aiohttp.ClientSession() as session:
-        url = f"{BASE_URL}/api/v1/orderBookDetails?market_id=1"
-        try:
-            async with session.get(url) as response:
-                data = await response.json()
-                if 'order_book_details' in data and len(data['order_book_details']) > 0:
-                    price = float(data['order_book_details'][0]['last_trade_price'])
-                    
-                    # Track recent prices for volatility (keep last 20)
-                    recent_prices.append(price)
-                    if len(recent_prices) > 20:
-                        recent_prices.pop(0)
-                    
-                    return price
-                else:
-                    print(f"⚠️ Unexpected API response: {data}")
-                    # Return a fallback or retry
-                    await asyncio.sleep(0.5)
-                    return await get_price()  # Retry once
-        except Exception as e:
-            print(f"⚠️ Error getting price: {e}")
-            await asyncio.sleep(1)
-            return await get_price()  # Retry
+    global http_session
+    if http_session is None:
+        http_session = aiohttp.ClientSession()
+    
+    url = f"{BASE_URL}/api/v1/orderBookDetails?market_id=1"
+    try:
+        async with http_session.get(url) as response:
+            data = await response.json()
+            if 'order_book_details' in data and len(data['order_book_details']) > 0:
+                price = float(data['order_book_details'][0]['last_trade_price'])
+                
+                # Track recent prices for volatility (keep last 20)
+                recent_prices.append(price)
+                if len(recent_prices) > 20:
+                    recent_prices.pop(0)
+                
+                return price
+            else:
+                print(f"⚠️ Unexpected API response: {data}")
+                # Return a fallback or retry
+                await asyncio.sleep(0.5)
+                return await get_price()  # Retry once
+    except Exception as e:
+        print(f"⚠️ Error getting price: {e}")
+        await asyncio.sleep(1)
+        return await get_price()  # Retry
 
 
 async def get_live_position():
     """Get actual live position from Lighter"""
-    async with aiohttp.ClientSession() as session:
-        url = f"{BASE_URL}/api/v1/account?by=index&value={ACCOUNT_INDEX}"
-        try:
-            async with session.get(url) as response:
-                data = await response.json()
-                
-                # Check for positions
-                account = data.get('account') or (data.get('accounts', [{}])[0] if data.get('accounts') else {})
-                positions = account.get('positions', [])
-                
-                # Find BTC position
-                for pos in positions:
-                    if pos.get('symbol') == 'BTC' or pos.get('market_id') == 1:
-                        position_btc = float(pos.get('position', 0)) / 1e8  # Convert from satoshis
-                        entry_price = float(pos.get('avg_entry_price', 0))
-                        unrealized_pnl = float(pos.get('unrealized_pnl', 0))
-                        
-                        if position_btc != 0:
-                            return {
-                                'size': abs(position_btc),
-                                'entry_price': entry_price,
-                                'pnl_usd': unrealized_pnl,
-                                'is_short': position_btc < 0
-                            }
-                
-                return None
-        except Exception as e:
-            print(f"⚠️ Error getting position: {e}")
+    global http_session
+    if http_session is None:
+        http_session = aiohttp.ClientSession()
+    
+    url = f"{BASE_URL}/api/v1/account?by=index&value={ACCOUNT_INDEX}"
+    try:
+        async with http_session.get(url) as response:
+            data = await response.json()
+            
+            # Check for positions
+            account = data.get('account') or (data.get('accounts', [{}])[0] if data.get('accounts') else {})
+            positions = account.get('positions', [])
+            
+            # Find BTC position
+            for pos in positions:
+                if pos.get('symbol') == 'BTC' or pos.get('market_id') == 1:
+                    position_btc = float(pos.get('position', 0)) / 1e8  # Convert from satoshis
+                    entry_price = float(pos.get('avg_entry_price', 0))
+                    unrealized_pnl = float(pos.get('unrealized_pnl', 0))
+                    
+                    if position_btc != 0:
+                        return {
+                            'size': abs(position_btc),
+                            'entry_price': entry_price,
+                            'pnl_usd': unrealized_pnl,
+                            'is_short': position_btc < 0
+                        }
+            
             return None
+    except Exception as e:
+        print(f"⚠️ Error getting position: {e}")
+        return None
 
 
 async def place_take_profit_percent(client, entry_price, position_size_btc, profit_percent):
@@ -273,14 +282,28 @@ async def main():
             # Monitor until position closes (TP hit) or needs doubling
             position_active = True
             while position_active:
-                await asyncio.sleep(1)
+                await asyncio.sleep(1.0)  # Safe: Check every 2 seconds (API rate limit protection)
                 
                 position = await get_live_position()
                 
+                # If no position, VERIFY it's actually closed (not just rate limit error)
                 if not position:
-                    print("✅ Position closed (TP hit)! Waiting 0.5 seconds before new position...")
-                    await asyncio.sleep(0.5)
-                    break  # Exit inner loop to open new position
+                    # Retry 3 times to confirm position is really closed
+                    confirmed_closed = True
+                    for verify_retry in range(3):
+                        await asyncio.sleep(1)
+                        position = await get_live_position()
+                        if position:
+                            confirmed_closed = False
+                            break
+                    
+                    if confirmed_closed:
+                        print("✅ Position closed (TP hit)! Waiting 0.5 seconds before new position...")
+                        await asyncio.sleep(0.5)
+                        break  # Exit inner loop to open new position
+                    else:
+                        print("⚠️ False alarm - position still active (was rate limited)")
+                        continue  # Skip to next iteration with valid position data
             
                 current_price = await get_price()
                 pnl_usd = position['pnl_usd']
@@ -334,15 +357,18 @@ async def main():
                         
                         # Add 4x position (quadruple the original)
                         await open_short(client, amount_multiplier=4)
-                        await asyncio.sleep(1)  # Wait longer for position to combine
+                        print("⏳ Waiting 3 seconds for API to combine positions...")
+                        await asyncio.sleep(3)  # Wait LONGER for Lighter API
                         
-                        # Get new position with retry
+                        # Get new position with MORE retries
                         new_position = None
-                        for retry in range(3):
+                        for retry in range(5):  # Increased from 3 to 5
                             new_position = await get_live_position()
                             if new_position and new_position['size'] > 0.000001:
+                                print(f"✅ Combined position found: {new_position['size']:.8f} BTC")
                                 break
-                            await asyncio.sleep(0.5)
+                            print(f"⏳ Retry {retry+1}/5: Position not ready yet...")
+                            await asyncio.sleep(1)  # Longer wait between retries
                         
                         if new_position:
                             dynamic_tp = get_dynamic_take_profit()
@@ -352,6 +378,9 @@ async def main():
                                 new_position['size'],
                                 dynamic_tp
                             )
+                            await asyncio.sleep(1)  # Wait after placing TP
+                        else:
+                            print("⚠️ WARNING: Could not verify combined position!")
                         
                         third_doubled = True
                         print(f"✅ Position octupled (8x)! New TP set\n")
@@ -373,15 +402,18 @@ async def main():
                         
                         # Add 2x position (double the original)
                         await open_short(client, amount_multiplier=2)
-                        await asyncio.sleep(1)  # Wait longer for position to combine
+                        print("⏳ Waiting 3 seconds for API to combine positions...")
+                        await asyncio.sleep(3)  # Wait LONGER for Lighter API
                         
-                        # Get new position with retry
+                        # Get new position with MORE retries
                         new_position = None
-                        for retry in range(3):
+                        for retry in range(5):  # Increased from 3 to 5
                             new_position = await get_live_position()
                             if new_position and new_position['size'] > 0.000001:
+                                print(f"✅ Combined position found: {new_position['size']:.8f} BTC")
                                 break
-                            await asyncio.sleep(0.5)
+                            print(f"⏳ Retry {retry+1}/5: Position not ready yet...")
+                            await asyncio.sleep(1)  # Longer wait between retries
                         
                         if new_position:
                             dynamic_tp = get_dynamic_take_profit()
@@ -391,6 +423,9 @@ async def main():
                                 new_position['size'],
                                 dynamic_tp
                             )
+                            await asyncio.sleep(1)  # Wait after placing TP
+                        else:
+                            print("⚠️ WARNING: Could not verify combined position!")
                         
                         second_doubled = True
                         print(f"✅ Position quadrupled (4x)! New TP set\n")
@@ -412,15 +447,18 @@ async def main():
                         
                         # Double position
                         await open_short(client)
-                        await asyncio.sleep(1)  # Wait longer for position to combine
+                        print("⏳ Waiting 3 seconds for API to combine positions...")
+                        await asyncio.sleep(3)  # Wait LONGER for Lighter API
                         
-                        # Get new position with retry
+                        # Get new position with MORE retries
                         new_position = None
-                        for retry in range(3):
+                        for retry in range(5):  # Increased from 3 to 5
                             new_position = await get_live_position()
                             if new_position and new_position['size'] > 0.000001:
+                                print(f"✅ Combined position found: {new_position['size']:.8f} BTC")
                                 break
-                            await asyncio.sleep(0.5)
+                            print(f"⏳ Retry {retry+1}/5: Position not ready yet...")
+                            await asyncio.sleep(1)  # Longer wait between retries
                         
                         if new_position:
                             dynamic_tp = get_dynamic_take_profit()
@@ -430,6 +468,9 @@ async def main():
                                 new_position['size'],
                                 dynamic_tp
                             )
+                            await asyncio.sleep(1)  # Wait after placing TP
+                        else:
+                            print("⚠️ WARNING: Could not verify combined position!")
                         
                         first_doubled = True
                         print(f"✅ Position doubled! New TP set\n")
@@ -441,6 +482,11 @@ async def main():
         print("\n\n⚠️ Bot stopped by user")
         print("Note: Take profit orders remain active in Lighter")
         print("Check Lighter UI to manage any open positions")
+    finally:
+        # Cleanup HTTP session
+        global http_session
+        if http_session:
+            await http_session.close()
 
 
 if __name__ == "__main__":
