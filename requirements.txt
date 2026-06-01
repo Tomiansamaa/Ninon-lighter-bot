@@ -1,0 +1,9 @@
+# Core dependencies (available on PyPI)
+aiohttp>=3.9
+python-dotenv>=1.0
+requests>=2.31
+eth-account>=0.10
+
+# Lighter.xyz Python SDK (imported as `lighter`).
+# Not on PyPI — install directly from the official repository:
+#   pip install git+https://github.com/elliottech/lighter-python.git

@@ -1,262 +1,118 @@
-# Lighter Trading Bot
+# Lighter BTC Short Bot
 
-A JavaScript/Node.js trading bot for [Lighter.xyz](https://lighter.xyz) - a decentralized spot order book exchange on Arbitrum.
+A small **Python** trading bot for [Lighter.xyz](https://lighter.xyz) (a perpetuals
+DEX on Arbitrum). It opens leveraged **short** positions on BTC, sets a take-profit
+target that adapts to recent volatility, and uses a martingale-style ladder that
+scales the position up if the trade moves against it.
 
-## 📋 Features
+> ⚠️ **High-risk strategy — read this first.** This bot uses **50x leverage** and a
+> **martingale doubling** ladder (1x → 2x → 4x → 8x on a losing position). Martingale
+> can wipe out an account during a sustained move. This code is shared for
+> **educational purposes only**. It is not financial advice. Never run it with funds
+> you cannot afford to lose, and test with the smallest possible size first.
 
-- ✅ REST API integration with Lighter.xyz
-- ✅ WebSocket support for real-time market data
-- ✅ EIP-712 signature authentication
-- ✅ Market and limit order execution
-- ✅ Real-time orderbook monitoring
-- ✅ Balance and position tracking
-- ✅ Configurable trading strategies
-- ✅ Error handling and auto-reconnection
+## What it does
 
-## 🚀 Getting Started
+- Connects to Lighter via the official `lighter` Python SDK (`SignerClient`)
+- Polls the BTC orderbook and tracks recent prices to estimate volatility (standard deviation)
+- Opens a market **short** on BTC and places a reduce-only **take-profit** order
+- Recomputes the take-profit target as volatility changes and re-places the order
+- Adds to the position at preset loss thresholds (martingale ladder)
+- Loops: after a take-profit fills, it opens a fresh position
 
-### Prerequisites
+## Repository layout
 
-- Node.js 18+ installed
-- npm or yarn package manager
-- A wallet with some funds on Arbitrum network
-- Lighter.xyz API credentials (obtained through their platform)
+| File | Purpose |
+|------|---------|
+| `ultra_simple_bot.py` | Main bot — volatility-adaptive take-profit + martingale short strategy |
+| `find_account_index.py` | Helper — derives your L1 address from your key and looks up your Lighter account index |
+| `check_balance.py` | Helper — prints your available USDC balance |
+| `check_positions.py` | Helper — prints open positions and recent orders |
+| `lighter_api_wrapper.py` | Minimal async REST wrapper used by the helper scripts |
 
-### Installation
+## Prerequisites
 
-1. **Clone or navigate to the project directory:**
+- Python 3.10+
+- A funded [Lighter.xyz](https://lighter.xyz) account on Arbitrum
+- Lighter API key credentials
+
+## Installation
 
 ```bash
-cd LighterKoodi
+# 1. Create a virtual environment
+python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
+
+# 2. Install dependencies
+pip install -r requirements.txt
+
+# 3. Install the Lighter SDK (not on PyPI)
+pip install git+https://github.com/elliottech/lighter-python.git
 ```
 
-2. **Install dependencies:**
+## Configuration
 
-```bash
-npm install
-```
-
-3. **Configure environment variables:**
-
-Copy the example environment file and fill in your credentials:
+Copy the example file and fill in your own values:
 
 ```bash
 cp .env.example .env
 ```
 
-Edit `.env` with your actual credentials:
+| Variable | Description |
+|----------|-------------|
+| `LIGHTER_API_URL` | Lighter API endpoint (e.g. `https://mainnet.zklighter.elliot.ai`) |
+| `PRIVATE_KEY` | Your Ethereum wallet private key (used locally to derive your L1 address) |
+| `LIGHTER_API_KEY_PRIVATE` | Lighter API key private key, used to sign orders |
+| `LIGHTER_ACCOUNT_INDEX` | Your Lighter account index (see below) |
+| `LIGHTER_API_KEY_INDEX` | Lighter API key index (default `10`) |
 
-```env
-# Lighter API Configuration
-LIGHTER_API_URL=https://api.lighter.xyz
-LIGHTER_API_KEY=your_api_key_here
-LIGHTER_API_SECRET=your_api_secret_here
-LIGHTER_API_PASSPHRASE=your_passphrase_here
+⚠️ **Never commit your `.env` or share your keys.** `.env` is already gitignored.
 
-# Blockchain Configuration (Arbitrum)
-CHAIN_ID=42161
-RPC_URL=https://arb1.arbitrum.io/rpc
-PRIVATE_KEY=your_private_key_here
-
-# WebSocket Configuration
-LIGHTER_WS_URL=wss://ws.lighter.xyz
-
-# Trading Configuration
-TRADING_ENABLED=false
-DEFAULT_SLIPPAGE=0.5
-MAX_POSITION_SIZE=1000
-```
-
-⚠️ **Security Warning:** Never commit your `.env` file or share your private keys!
-
-## 📚 API Credentials Setup
-
-### Getting Your API Key
-
-To use the Lighter API, you need to:
-
-1. Visit [Lighter.xyz](https://lighter.xyz) and connect your wallet
-2. Navigate to the API section in your account settings
-3. Generate API credentials (API Key, Secret, and Passphrase)
-4. Add these credentials to your `.env` file
-
-Alternatively, you can create API credentials programmatically using the bot:
-
-```javascript
-import { LighterClient } from './src/api/lighterClient.js';
-
-const client = new LighterClient();
-const credentials = await client.createApiKey();
-console.log('API Credentials:', credentials);
-```
-
-## 🧪 Testing Connection
-
-Before running the bot, test your connection:
+## Usage
 
 ```bash
-npm run test
+# Find your account index (writes nothing — just prints it)
+python find_account_index.py
+
+# Sanity-check your account before trading
+python check_balance.py
+python check_positions.py
+
+# Run the bot
+python ultra_simple_bot.py
 ```
 
-This will:
-- Validate your configuration
-- Test REST API connectivity
-- Fetch available markets
-- Test WebSocket connection
-- Display your account information
+Stop the bot with `Ctrl+C`. Note that any take-profit orders it placed remain
+active on Lighter — manage open positions from the Lighter UI.
 
-## 🎯 Usage
+## Strategy parameters
 
-### Running the Bot
+Tunable constants at the top of `ultra_simple_bot.py`:
 
-Start the trading bot:
+- `BTC_AMOUNT` — base position size in BTC (default `0.000015`)
+- `FIRST_DOUBLE_LOSS_USD` / `SECOND_DOUBLE_LOSS_USD` / `THIRD_DOUBLE_LOSS_USD` — USD loss
+  thresholds that trigger the 2x / 4x / 8x martingale steps
 
-```bash
-npm start
-```
+Take-profit adapts to volatility (standard deviation of recent % price changes):
 
-For development with auto-reload:
+| Volatility (STD) | Take-profit target |
+|------------------|--------------------|
+| < 0.03% | 1.2% |
+| 0.03–0.08% | 1.8% |
+| 0.08–0.15% | 2.5% |
+| 0.15–0.25% | 3.5% |
+| > 0.25% | 5.0% |
 
-```bash
-npm run dev
-```
+## Resources
 
-### Basic Trading Examples
+- [Lighter API docs](https://apidocs.lighter.xyz/docs)
+- [Lighter Python SDK](https://github.com/elliottech/lighter-python)
 
-#### 1. Place a Market Order
+## Disclaimer
 
-```javascript
-await bot.placeMarketOrder('WETH-USDC', 'buy', 0.1);
-```
+This software is provided for educational purposes only and carries significant
+financial risk. Trading leveraged crypto perpetuals can result in the total loss of
+your funds. Do your own research and never trade more than you can afford to lose.
 
-#### 2. Place a Limit Order
+## License
 
-```javascript
-await bot.placeLimitOrder('WETH-USDC', 'buy', 0.1, 1800);
-```
-
-#### 3. Get Account Balances
-
-```javascript
-const balances = await bot.getBalances();
-```
-
-#### 4. Get Active Orders
-
-```javascript
-const orders = await bot.getActiveOrders();
-```
-
-#### 5. Subscribe to Market Data
-
-```javascript
-await bot.subscribeToMarket('WETH-USDC');
-```
-
-## 🏗️ Project Structure
-
-```
-LighterKoodi/
-├── src/
-│   ├── api/
-│   │   ├── lighterClient.js      # REST API client
-│   │   └── websocketClient.js    # WebSocket client
-│   ├── config/
-│   │   └── config.js             # Configuration management
-│   ├── index.js                  # Main bot entry point
-│   └── test-connection.js        # Connection test script
-├── .env.example                  # Example environment variables
-├── .gitignore                    # Git ignore rules
-├── package.json                  # Node.js dependencies
-└── README.md                     # This file
-```
-
-## 🔐 Authentication
-
-Lighter uses a two-level authentication system:
-
-### L1: Private Key Authentication
-- Used for critical operations like creating API keys
-- Signs EIP-712 typed data with your wallet
-- Never exposed to the server
-
-### L2: API Key Authentication
-- Used for trading operations
-- HMAC-SHA256 signatures
-- Includes API key, secret, and passphrase
-
-## 📊 Trading Configuration
-
-Configure trading parameters in `.env`:
-
-- `TRADING_ENABLED`: Enable/disable actual trading (default: `false`)
-- `DEFAULT_SLIPPAGE`: Maximum acceptable slippage (default: `0.5%`)
-- `MAX_POSITION_SIZE`: Maximum position size (default: `1000`)
-
-## 🛡️ Security Best Practices
-
-1. **Never share your private key or API credentials**
-2. **Use environment variables** for sensitive data
-3. **Start with TRADING_ENABLED=false** to test
-4. **Use small amounts** when testing live
-5. **Monitor your positions** regularly
-6. **Keep your dependencies updated**
-7. **Review the code** before running
-
-## 📡 WebSocket Events
-
-The bot listens to various WebSocket events:
-
-- `orderbook` - Orderbook updates
-- `trade` - Trade executions
-- `orderUpdate` - Your order status changes
-- `balanceUpdate` - Account balance changes
-- `ticker` - Price ticker updates
-
-## 🐛 Troubleshooting
-
-### "Configuration validation failed"
-- Check that all required environment variables are set in `.env`
-- Verify your API credentials are correct
-
-### "WebSocket connection failed"
-- Check your internet connection
-- Verify the WebSocket URL is correct
-- Check if Lighter.xyz services are operational
-
-### "Failed to place order"
-- Ensure `TRADING_ENABLED=true` in `.env`
-- Verify you have sufficient balance
-- Check order parameters (size, price, etc.)
-
-## 📖 Resources
-
-- [Lighter API Documentation](https://apidocs.lighter.xyz/docs)
-- [Lighter Documentation](https://docs.lighter.xyz)
-- [Lighter Website](https://lighter.xyz)
-- [Arbitrum Network](https://arbitrum.io)
-
-## ⚖️ Disclaimer
-
-This software is for educational purposes only. Trading cryptocurrencies carries significant risk. Always:
-
-- Test thoroughly before live trading
-- Start with small amounts
-- Never invest more than you can afford to lose
-- Do your own research
-- Understand the risks involved
-
-## 📄 License
-
-MIT License - feel free to use and modify as needed.
-
-## 🤝 Support
-
-For issues or questions:
-- Check the [Lighter documentation](https://docs.lighter.xyz)
-- Visit Lighter's Discord or Telegram channels
-- Review the API documentation at [apidocs.lighter.xyz](https://apidocs.lighter.xyz/docs)
-
----
-
-**Happy Trading! 🚀** 
+[MIT](LICENSE) © 2025 Tomi Ansamaa
